@@ -10,7 +10,7 @@ global class chs_SynchronizeAccountContact implements Messaging.InboundEmailHand
     public void chs_SynchronizeAccountContact() {}
     
     global Messaging.InboundEmailResult handleInboundEmail(Messaging.InboundEmail email, Messaging.InboundEnvelope envelope) {
-		Messaging.InboundEmailResult result = new Messaging.InboundEmailresult();
+        Messaging.InboundEmailResult result = new Messaging.InboundEmailresult();
         System.debug('Received Email');
         if (email.textAttachments  != null && email.textAttachments.size() > 0) {
             System.debug('Received Attachment');
@@ -18,7 +18,7 @@ global class chs_SynchronizeAccountContact implements Messaging.InboundEmailHand
         } else if (email.binaryAttachments != null && email.binaryAttachments.size() > 0) {
             this.syncContactAccount(this.parseCSV(email.binaryAttachments[0].body.toString(), True));
         }
-		return result;
+        return result;
     }
     
     global List<List<String>> parseCSV(String contents, Boolean skipHeaders) {
@@ -44,7 +44,7 @@ global class chs_SynchronizeAccountContact implements Messaging.InboundEmailHand
             // check for blank CSV lines (only commas)
             if (line.replaceAll(',','').trim().length() == 0) break;
             
-            List<String> fields = line.split(',');	
+            List<String> fields = line.split(',');  
             List<String> cleanFields = new List<String>();
             String compositeField;
             Boolean makeCompositeField = false;
@@ -68,7 +68,7 @@ global class chs_SynchronizeAccountContact implements Messaging.InboundEmailHand
             allFields.add(cleanFields);
         }
         if (skipHeaders) allFields.remove(0);
-        return allFields;		
+        return allFields;       
     }
     
     global void syncContactAccount(List<List<String>> allFields) {
@@ -79,14 +79,15 @@ global class chs_SynchronizeAccountContact implements Messaging.InboundEmailHand
         }
         Set<String> setSFTenentId = new Set<String>();
         setSFTenentId.addAll(mapSFAccounts.keySet());
-		
+        
         Map<String, Account> mapAccToCreate = new Map<String, Account>();
         for(List<String> line: allFields) {
-            String tenantId = line[0], tenantName=line[1];
+            String tenantId = line[0].removeStart('"').removeEnd('"').trim(), tenantName=line[1].trim();
             if(!setSFTenentId.contains(tenantId)) { // If account not exists
                 Account a = new Account(Name=tenantName, Tenant_Id__c=tenantId);
                 mapAccToCreate.put(tenantId, a);
                 mapSFAccounts.put(tenantId, a);
+                setSFTenentId.add(tenantId);
             }
         }
         if(!mapAccToCreate.isEmpty()) {
@@ -98,40 +99,48 @@ global class chs_SynchronizeAccountContact implements Messaging.InboundEmailHand
         for(Contact c: [SELECT Id, Name, User_Id__c, Account.Tenant_Id__c FROM Contact WHERE User_Id__c != NULL]) {
             mapSFContacts.put(c.Account.Tenant_Id__c.trim()+'_'+c.User_Id__c.trim(), c);
         }
-        System.debug(mapSFContacts);
+        //System.debug(mapSFContacts);
         Set<String> setSFUserId = new Set<String>();
         setSFUserId.addAll(mapSFContacts.keySet());
-		System.debug(setSFUserId);
+        //System.debug(setSFUserId);
         Set<String> setImportUserId = new Set<String>();
-		
+        
         List<Contact> listContactToCreate = new List<Contact>();
         List<Contact> listContactToUpdate = new List<Contact>();
         for(List<String> line: allFields) {
-            String tenantId=line[0], tenantName=line[1], userId=line[2], userName=line[3], userEmail=line[4];
+            String tenantId=line[0].removeStart('"').removeEnd('"').trim(), tenantName=line[1].trim(), userId=line[2].removeStart('"').removeEnd('"').trim(), userName=line[3].trim(), userEmail=line[4].removeStart('"').removeEnd('"').trim();
             List<String> listNameParts = userName.trim().split(' ');
             String fName = (listNameParts.size() > 1) ? listNameParts[0] : '';
             String lName = (listNameParts.size() == 1) ? listNameParts[0] : (listNameParts.size() == 2 ? listNameParts[1] : '');
-            String strUser = tenantId.trim() + '_' + userId.trim();
+            String strUser = tenantId + '_' + userId;
             setImportUserId.add(strUser);
-            if(setSFUserId.contains(strUser) == False) { // If contact not exists
+            if(!setSFUserId.contains(strUser)) { // If contact not exists in SF
                 Id idAcc = Null;
-                if(mapSFAccounts.containsKey(tenantId)) idAcc = mapSFAccounts.get(tenantId).Id;
+                if(mapSFAccounts.containsKey(tenantId)) {
+                    idAcc = mapSFAccounts.get(tenantId).Id;
+                } else System.debug('idAcc not found.');
                 Contact c = new Contact(FirstName=fName, LastName=lName, User_Id__c=userId, Email=userEmail, AccountId=idAcc);
                 listContactToCreate.add(c);
             } else {
                 Contact c = mapSFContacts.get(strUser);
-				c.FirstName = fName;
+                c.FirstName = fName;
                 c.LastName = lName;
                 c.User_Id__c = userId;
                 c.Email = userEmail;
                 listContactToUpdate.add(c);
             }
         }
-        //System.debug('listContactToCreate: '+listContactToCreate.size());
+        System.debug('listContactToCreate: '+listContactToCreate.size());
         //System.debug('listContactToUpdate: '+listContactToUpdate.size());
-        if(!listContactToCreate.isEmpty()) Database.insert(listContactToCreate, false);
+        if(!listContactToCreate.isEmpty()) {
+            Database.SaveResult[] srList = Database.insert(listContactToCreate, false);
+            System.debug(srList);
+        }
         if(!listContactToUpdate.isEmpty()) Database.update(listContactToUpdate, false);
+        System.debug('setImportUserId'+setImportUserId);
+        System.debug('setSFUserId'+setSFUserId);
         setSFUserId.removeAll(setImportUserId);
+        System.debug('setSFUserId after remove: '+setSFUserId);
         if(!setSFUserId.isEmpty()){
             List<Contact> listContactToDeactivate = new List<Contact>();
             for(String uid: setSFUserId) {

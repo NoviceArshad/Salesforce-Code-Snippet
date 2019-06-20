@@ -1,0 +1,122 @@
+global class CHS_UpdateDomainPerformanceWithOpp_Batch implements Database.Batchable<SObject>, Schedulable, Database.Stateful{    
+    private String aquery=null;
+    global Set<Id> setIdUnfinishedOpp;
+    public CHS_UpdateDomainPerformanceWithOpp_Batch(Set<Id> setIdOpp) //String query 
+    {
+        if(setIdOpp==null || setIdOpp.IsEmpty()) {
+            setIdUnfinishedOpp = new Set<Id>();
+        } else {
+            setIdUnfinishedOpp = setIdOpp;
+        }
+    }
+    
+    global database.querylocator start(Database.BatchableContext bc)
+    {
+        if(setIdUnfinishedOpp.isEmpty()) {
+            Date dt = System.Today() - Integer.valueOf(Label.Opportunity_Closed_Days);
+            aquery = 'SELECT Id, Name, AccountId '+
+                'FROM Opportunity '+
+                'WHERE (StageName = \'Closed Won\' AND CloseDate > :dt ) ';
+        } else {
+            String strIdOpp = '';
+            for(Id idOpp : setIdUnfinishedOpp) {
+                strIdOpp += '\''+idOpp+'\',';
+            }
+            strIdOpp = strIdOpp.removeEnd(',');
+            aquery = 'SELECT Id, Name, AccountId '+
+                'FROM Opportunity '+
+                'WHERE Id IN ('+strIdOpp+') ';
+            setIdUnfinishedOpp.clear();
+        }
+        
+        return Database.getQueryLocator(aquery);   
+    }
+    
+    global void execute(Database.BatchableContext bc, Opportunity[] listOpps)
+    {
+        Set<Id> setIdAcct = new Set<Id>();
+        Set<Id> setIdOpp = new Set<Id>();
+        Set<Id> setIdProd = new Set<Id>();
+        Set<Id> setIdWebDomain = new Set<Id>();
+        Integer listToUpdateSize=0, listToUpdateSizeLimit=9990, totalDPSize=0, totalDPSizeLimit=50000;
+        Map<Id, List<OpportunityLineItem>> mapOppProd = new Map<Id, List<OpportunityLineItem>>();
+        Map<String, OpportunityLineItem> mapProdOpp = new Map<String, OpportunityLineItem>();
+        map<Id, Domain_Performance__c> lstDomainPerformance = new map<Id, Domain_Performance__c>();
+        List<Domain_Performance__c> listDomPersToUpdate = new List<Domain_Performance__c>();
+        
+        for(Opportunity opp : listOpps) {            
+            setIdAcct.add(opp.AccountId);
+            setIdOpp.add(opp.Id);
+        }
+        
+        for(OpportunityLineItem oppProd : [SELECT Id, Product2Id, OpportunityId, Opportunity.AccountId, Web_Domain__c, Available_Impressions__c, Predicated_Revenue__c 
+                                           FROM OpportunityLineItem WHERE OpportunityId = :setIdOpp])
+        {
+            setIdProd.add(oppProd.Product2Id);
+            String key = oppProd.Product2Id+'_'+oppProd.Opportunity.AccountId+'_'+oppProd.Web_Domain__c;
+            mapProdOpp.put(key, oppProd);
+            
+            if(oppProd.Web_Domain__c!=null) {
+                setIdWebDomain.add(oppProd.Web_Domain__c);
+            }         
+        }
+        
+        setIdAcct.remove(null);
+        setIdWebDomain.remove(null);
+        
+        for (Domain_Performance__c dp : [SELECT Id, Name, Opportunity__c, Account__c, Month__c, Product__c, Web_Domain__c FROM Domain_Performance__c 
+                                         WHERE Account__c = :setIdAcct
+                                         AND Web_Domain__c = :setIdWebDomain
+                                         AND Product__c = :setIdProd 
+                                         AND (Opportunity__c = null OR Available_Impressions__c = null OR Predicated_Revenue__c = null)
+                                         LIMIT :totalDPSizeLimit
+                                        ])
+        {
+            totalDPSize++;
+            Id idLastOpp;
+            String key = dp.Product__c+'_'+dp.Account__c+'_'+dp.Web_Domain__c;
+            if(mapProdOpp.containsKey(key)) {
+                dp.Opportunity__c = mapProdOpp.get(key).OpportunityId;
+                dp.Available_Impressions__c = mapProdOpp.get(key).Available_Impressions__c;
+                dp.Predicated_Revenue__c = mapProdOpp.get(key).Predicated_Revenue__c;
+                listDomPersToUpdate.add(dp);
+                listToUpdateSize++;
+                idLastOpp = mapProdOpp.get(key).OpportunityId;
+            }
+            if(listToUpdateSize >= listToUpdateSizeLimit) {
+                setIdUnfinishedOpp.add(idLastOpp);
+                break;
+            }
+            
+        }
+        
+        if(!listDomPersToUpdate.isEmpty()) {
+            try {
+            	update listDomPersToUpdate;
+            } catch(Exception e) {
+                setIdUnfinishedOpp.addAll(setIdOpp);
+                System.debug('Error: update Domain Performance failed. '+e.getMessage());
+            }
+        }
+        if(totalDPSize == totalDPSizeLimit) {
+            setIdUnfinishedOpp.addAll(setIdOpp);
+        }
+        
+    }
+    
+    global void finish(Database.BatchableContext bc)
+    {
+        if(!setIdUnfinishedOpp.isEmpty()) {
+            CHS_UpdateDomainPerformanceWithOpp_Batch job = new CHS_UpdateDomainPerformanceWithOpp_Batch(setIdUnfinishedOpp);
+        	Database.executeBatch(job, 1); 
+        }
+    }
+    
+    global void execute(SchedulableContext sc)
+    {
+        //System.schedule('Trial Activation Request Schedulabled', '0 0 13 * * ?', new CHS_UpdateDomainPerformanceWithOpp_Batch());
+        
+        CHS_UpdateDomainPerformanceWithOpp_Batch job = new CHS_UpdateDomainPerformanceWithOpp_Batch(null);
+        Database.executeBatch(job, 1); 
+    }
+}

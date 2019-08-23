@@ -1,20 +1,34 @@
-public class DynamicApex {
-    @AuraEnabled    
-    public static List<String> getPicklistValues(String ObjectApi_name,String Field_name){ 
-        List<String> lstPickvals=new List<String>();
-        Schema.SObjectType targetType = Schema.getGlobalDescribe().get(ObjectApi_name);//From the Object Api name retrieving the SObject
-        Sobject Object_name = targetType.newSObject();
-        Schema.sObjectType sobject_type = Object_name.getSObjectType(); //grab the sobject that was passed
-        Schema.DescribeSObjectResult sobject_describe = sobject_type.getDescribe(); //describe the sobject
-        Map<String, Schema.SObjectField> field_map = sobject_describe.fields.getMap(); //get a map of fields for the passed sobject
-        List<Schema.PicklistEntry> pick_list_values = field_map.get(Field_name).getDescribe().getPickListValues(); //grab the list of picklist values for the passed field on the sobject
-        //  lstPickvals.add('None');//add default None
-        for (Schema.PicklistEntry a : pick_list_values) { //for all values in the picklist list
-            lstPickvals.add(a.getValue());//add the value  to our final list
-        }//loop ends here
-        return lstPickvals; 
+/** 
+	* @Purpose: This class is a Queueable with a Invocable method to integrate with sharepoint
+ 	* - Queueable has been implemented because the Invocable method will be called from a Process Builder (or trigger)
+	* - From trigger or process builder, an error shows up as 'You have uncommitted work pending'
+    * @Author: Cloud Haven Solutions
+    * @CreatedDate: 08/21/2019
+    * @Test Class:
+    * @LastModifiedDate: 08/21/2019
+    * @LastModifiedBy: Arshad
+*/
+public class chs_SharepointSetMetadata implements Queueable, Database.AllowsCallouts {
+    String spFolderId;
+    Map<String,String> mapFieldValues;
+    public chs_SharepointSetMetadata(String spFolderId, Map<String,String> mapFieldValues){
+        this.spFolderId = spFolderId;
+        this.mapFieldValues = mapFieldValues;
     }
-
+    
+    @InvocableMethod(label='UpdateSharepointMetadata')
+    public static void setSharepointSetMetadata(List<Id> listOppId) {
+        for(Opportunity opp : [SELECT SharePointFolderId__c FROM Opportunity WHERE Id IN :listOppId]){
+            Map<String,String> mapFieldValues = new Map<String,String>();
+            mapFieldValues = getMetadataMap(opp.Id);
+            System.enqueueJob(new chs_SharepointSetMetadata(opp.SharePointFolderId__c, mapFieldValues));
+        }
+    }
+    
+    public void execute(QueueableContext context) {
+        SharePointOnlineUtility.setSharePointFolderMetadata(this.spFolderId, this.mapFieldValues );
+    }
+    
     /**
     * @Purpose: The mapping between some keyword and SF field API name are exist in a Custom Metadata Type
     * This method grabs field names from the mdt and generate the query. 

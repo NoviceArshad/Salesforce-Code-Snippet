@@ -1,0 +1,28 @@
+@AuraEnabled 
+    public static Case saveClaimRecord(Map<String,String> theClaim) {
+        String objectName = 'Case';
+        List<String> setFieldNames = new List<String>();
+        Case c =  new Case();
+        for (String fieldName : theClaim.keySet()) {
+            System.debug(fieldName);
+            setFieldNames.add(fieldName);
+            SObjectType r = ((SObject)(Type.forName('Schema.'+objectName).newInstance())).getSObjectType();
+            DescribeSObjectResult d = r.getDescribe();
+            String dataType = String.valueOf(d.fields.getMap().get(fieldName).getDescribe().getType());
+            System.debug(dataType);
+            if(dataType.toUpperCase() == 'ID') {
+                c.put(fieldName, theClaim.get(fieldName));
+            } else if(dataType.toUpperCase() == 'DATE' && theClaim.get(fieldName)!=null) {
+                c.put(fieldName, Date.valueOf(theClaim.get(fieldName)));
+            } else if(dataType.toUpperCase() == 'NUMBER' || dataType == 'CURRENCY') {
+                c.put(fieldName, Decimal.valueOf(theClaim.get(fieldName)));
+            } else {
+                c.put(fieldName, theClaim.get(fieldName));
+            }
+        }
+        //c.ContactId = '003P000001FS9T4IAL';
+        upsert c;
+        c = Database.query('SELECT '+String.join(setFieldNames, ', ')+', CaseNumber FROM Case WHERE Id=\''+c.Id+'\'');
+        System.debug(theClaim);
+        return c;
+    }
